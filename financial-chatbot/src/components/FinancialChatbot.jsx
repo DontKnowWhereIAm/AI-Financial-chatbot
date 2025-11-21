@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Send, DollarSign, FileText, X, TrendingUp, PieChart, Calendar } from 'lucide-react';
+import { Upload, Send, DollarSign, FileText, X, TrendingUp, LogOut } from 'lucide-react';
 
-export default function FinancialChatbot() {
+export default function FinancialChatbot({ user, onLogout }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -133,7 +133,25 @@ export default function FinancialChatbot() {
               <p className="text-sm text-purple-300">AI-Powered Budget Analysis</p>
             </div>
           </div>
-          
+
+          {/* Hi User */}
+          {user && (
+            <span className="text-sm text-purple-200 flex items-center">
+              Hi, <span className="font-semibold ml-1">{user.name}</span>
+            </span>
+          )}
+
+          {/* Logout Button */}
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-2 text-purple-200 hover:text-purple-100 text-sm transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              Logout
+            </button>
+          )}
+
           {/* Upload Button */}
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -152,6 +170,8 @@ export default function FinancialChatbot() {
             className="hidden"
           />
         </div>
+
+
       </div>
 
       <div className="flex-1 overflow-hidden flex max-w-6xl w-full mx-auto">
