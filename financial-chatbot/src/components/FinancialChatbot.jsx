@@ -12,8 +12,11 @@ export default function FinancialChatbot({ user, onLogout }) {
   const [input, setInput] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [sessionId] = useState(() => `session_${Date.now()}_${Math.random()}`);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  const API_BASE_URL = 'http://127.0.0.1:5000/api';
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -32,7 +35,7 @@ export default function FinancialChatbot({ user, onLogout }) {
       'text/csv'
     ];
 
-    const validFiles = files.filter(file => 
+    const validFiles = files.filter(file =>
       validTypes.includes(file.type) || file.name.endsWith('.csv')
     );
 
@@ -42,29 +45,58 @@ export default function FinancialChatbot({ user, onLogout }) {
     }
 
     setIsProcessing(true);
-    
-    // Simulate processing
-    setTimeout(() => {
-      const newFiles = validFiles.map(file => ({
-        id: Date.now() + Math.random(),
-        name: file.name,
-        size: (file.size / 1024).toFixed(2) + ' KB',
-        type: file.type.includes('pdf') ? 'PDF' : 
-              file.type.includes('sheet') || file.type.includes('excel') ? 'Excel' : 'CSV'
-      }));
 
-      setUploadedFiles([...uploadedFiles, ...newFiles]);
-      
-      setMessages([...messages, {
+    try {
+      for (const file of validFiles) {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('session_id', sessionId);
+
+        const response = await fetch(`${API_BASE_URL}/upload`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          const newFile = {
+            id: Date.now() + Math.random(),
+            name: file.name,
+            size: (file.size / 1024).toFixed(2) + ' KB',
+            type: file.type.includes('pdf') ? 'PDF' :
+                  file.type.includes('sheet') || file.type.includes('excel') ? 'Excel' : 'CSV',
+            stats: data.stats
+          };
+
+          setUploadedFiles(prev => [...prev, newFile]);
+
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: data.message + (data.stats ? `\n\nDate range: ${data.stats.date_range?.start || 'N/A'} to ${data.stats.date_range?.end || 'N/A'}` : ''),
+            timestamp: new Date()
+          }]);
+        } else {
+          throw new Error(data.error || 'Upload failed');
+        }
+      }
+
+      setMessages(prev => [...prev, {
         role: 'assistant',
         content: `I've successfully processed ${validFiles.length} file(s). I can now answer questions about your transactions, spending patterns, and help you with budgeting insights. What would you like to know?`,
         timestamp: new Date()
       }]);
-      
+    } catch (error) {
+      console.error('Upload error:', error);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `Sorry, there was an error processing your file: ${error.message}. Please make sure the backend server is running on port 5000.`,
+        timestamp: new Date()
+      }]);
+    } finally {
       setIsProcessing(false);
-    }, 1500);
-
-    e.target.value = '';
+      e.target.value = '';
+    }
   };
 
   const removeFile = (fileId) => {
@@ -84,25 +116,41 @@ export default function FinancialChatbot({ user, onLogout }) {
     setInput('');
     setIsProcessing(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const responses = [
-        "Based on your uploaded statements, I can see your spending patterns. Your largest expense category appears to be dining out, accounting for approximately 25% of your total spending.",
-        "Looking at your transaction history, I notice you have recurring subscriptions totaling around $150/month. Would you like me to list them out?",
-        "Your spending has increased by 15% compared to last month, primarily in the shopping category. Consider setting a budget limit for discretionary spending.",
-        "I've analyzed your income and expenses. You're currently saving about 20% of your monthly income, which is a healthy savings rate. Keep it up!",
-        "Based on the data, here are your top 3 spending categories: 1) Groceries ($450), 2) Transportation ($320), 3) Entertainment ($280)."
-      ];
+    try {
+      const response = await fetch(`${API_BASE_URL}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: userMessage.content,
+          session_id: sessionId,
+        }),
+      });
 
-      const assistantMessage = {
+      const data = await response.json();
+
+      if (data.success) {
+        const assistantMessage = {
+          role: 'assistant',
+          content: data.response,
+          timestamp: new Date()
+        };
+
+        setMessages(prev => [...prev, assistantMessage]);
+      } else {
+        throw new Error(data.error || 'Chat request failed');
+      }
+    } catch (error) {
+      console.error('Chat error:', error);
+      setMessages(prev => [...prev, {
         role: 'assistant',
-        content: responses[Math.floor(Math.random() * responses.length)],
+        content: `Sorry, there was an error: ${error.message}. Please make sure you've uploaded a file and the backend server is running.`,
         timestamp: new Date()
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
+      }]);
+    } finally {
       setIsProcessing(false);
-    }, 1000);
+    }
   };
 
   const handleKeyPress = (e) => {

@@ -1,9 +1,8 @@
-import json
 import pandas as pd
+import json
 from typing import Dict, List, Optional
 import requests
 from groq import Groq
-import pdfplumber
 
 class FinancialChatbot:
     """

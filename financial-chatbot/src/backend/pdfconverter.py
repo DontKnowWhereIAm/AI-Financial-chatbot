@@ -27,11 +27,18 @@ def _first_match(cols, *needles):
                 return c
     return None
 
-def load_transactions_interactive(keep_extra=False) -> pd.DataFrame:
-    print("📂 Please upload your transaction file (.csv, .xlsx, or .pdf)")
-    uploaded = files.upload()
-    path = list(uploaded.keys())[0]
-    print(f"✅ Uploaded: {path}")
+def load_transactions_from_file(path: str, keep_extra=False) -> pd.DataFrame:
+    """
+    Load and standardize transaction data from a file path.
+
+    Args:
+        path: Path to the transaction file (.csv, .xlsx, or .pdf)
+        keep_extra: Whether to keep extra columns like reference and balance
+
+    Returns:
+        Standardized DataFrame with transaction data
+    """
+    print(f"✅ Processing: {path}")
 
     p = path.lower()
     # --- Load file ---
@@ -109,4 +116,9 @@ def load_transactions_interactive(keep_extra=False) -> pd.DataFrame:
                                      "balance": balance_col, "ref": ref_col})
     return out
 
-# Run it (set keep_extra=True if you also want reference/balance columns included)
+def load_transactions_interactive(keep_extra=False) -> pd.DataFrame:
+    """
+    Legacy function for backward compatibility.
+    In web environment, use load_transactions_from_file() instead.
+    """
+    raise NotImplementedError("Interactive upload not available in web environment. Use load_transactions_from_file() instead.")
