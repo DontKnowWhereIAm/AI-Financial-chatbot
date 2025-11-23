@@ -1,0 +1,104 @@
+/**
+ * API Service for Financial Chatbot
+ * 
+ * This file handles all communication with the Python backend.
+ * 
+ * To use:
+ * 1. Rename this file from api.js.example to api.js
+ * 2. Make sure your Python backend is running on http://localhost:5000
+ * 3. Import these functions in FinancialChatbot.jsx:
+ *    import { uploadFile, analyzeSpending } from '../services/api';
+ */
+
+// Base URL for your Python backend
+const API_BASE_URL = 'http://localhost:5000/api';
+
+/**
+ * Uploads a file to the backend for processing
+ * 
+ * This calls your Python backend's /api/upload endpoint,
+ * which in turn calls your convert_to_dataframe() function.
+ * 
+ * @param {File} file - The file to upload (PDF, Excel, or CSV)
+ * @returns {Promise<Object>} Response with file_id, filename, rows, columns
+ * @throws {Error} If upload fails
+ */
+export const uploadFile = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  try {
+    const response = await fetch(`${API_BASE_URL}/upload`, {
+      method: 'POST',
+      body: formData,
+      // Don't set Content-Type header - browser will set it with boundary
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Upload failed');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    // Handle network errors
+    if (error.message === 'Failed to fetch') {
+      throw new Error('Cannot connect to backend. Make sure the Python server is running on port 5000.');
+    }
+    throw error;
+  }
+};
+
+/**
+ * Sends a question to the backend for spending analysis
+ * 
+ * This calls your Python backend's /api/analyze endpoint,
+ * which in turn calls your analyze_spending() function.
+ * 
+ * @param {string} question - The user's question about their spending
+ * @param {string[]} fileIds - Array of file IDs to analyze (from uploaded files)
+ * @returns {Promise<Object>} Response with analysis result
+ * @throws {Error} If analysis fails
+ */
+export const analyzeSpending = async (question, fileIds) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        question,
+        file_ids: fileIds,
+      }),
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Analysis failed');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    // Handle network errors
+    if (error.message === 'Failed to fetch') {
+      throw new Error('Cannot connect to backend. Make sure the Python server is running on port 5000.');
+    }
+    throw error;
+  }
+};
+
+/**
+ * Health check to verify backend is running
+ * 
+ * @returns {Promise<boolean>} True if backend is reachable
+ */
+export const checkBackendHealth = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`);
+    return response.ok;
+  } catch (error) {
+    return false;
+  }
+};
+

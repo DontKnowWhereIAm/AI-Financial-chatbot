@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Send, DollarSign, FileText, X, TrendingUp, LogOut } from 'lucide-react';
+import { uploadFile, analyzeSpending } from '../services/api';
 
 export default function FinancialChatbot({ user, onLogout }) {
   const [messages, setMessages] = useState([
@@ -12,6 +13,7 @@ export default function FinancialChatbot({ user, onLogout }) {
   const [input, setInput] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [sessionId, setSessionId] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -43,26 +45,45 @@ export default function FinancialChatbot({ user, onLogout }) {
 
     setIsProcessing(true);
     
-    // Simulate processing
-    setTimeout(() => {
-      const newFiles = validFiles.map(file => ({
-        id: Date.now() + Math.random(),
-        name: file.name,
-        size: (file.size / 1024).toFixed(2) + ' KB',
-        type: file.type.includes('pdf') ? 'PDF' : 
-              file.type.includes('sheet') || file.type.includes('excel') ? 'Excel' : 'CSV'
+    try {
+      // Upload each file to the backend
+      const uploadPromises = validFiles.map(file => uploadFile(file, sessionId));
+      const uploadResults = await Promise.all(uploadPromises);
+      
+      // Store session ID from first upload if not set
+      if (!sessionId && uploadResults.length > 0 && uploadResults[0].session_id) {
+        setSessionId(uploadResults[0].session_id);
+      }
+      
+      // Store file info with backend file_id
+      const newFiles = uploadResults.map((result, index) => ({
+        id: result.file_id,
+        name: result.filename,
+        size: (validFiles[index].size / 1024).toFixed(2) + ' KB',
+        type: validFiles[index].type.includes('pdf') ? 'PDF' : 
+              validFiles[index].type.includes('sheet') || validFiles[index].type.includes('excel') ? 'Excel' : 'CSV',
+        rows: result.rows,
+        columns: result.columns
       }));
 
       setUploadedFiles([...uploadedFiles, ...newFiles]);
       
+      const totalRows = uploadResults.reduce((sum, r) => sum + r.rows, 0);
       setMessages([...messages, {
         role: 'assistant',
-        content: `I've successfully processed ${validFiles.length} file(s). I can now answer questions about your transactions, spending patterns, and help you with budgeting insights. What would you like to know?`,
+        content: `I've successfully processed ${validFiles.length} file(s) with ${totalRows} total transactions. I can now answer questions about your transactions, spending patterns, and help you with budgeting insights. What would you like to know?`,
         timestamp: new Date()
       }]);
-      
+    } catch (error) {
+      console.error('File upload error:', error); // Debug logging
+      setMessages([...messages, {
+        role: 'assistant',
+        content: `Error processing files: ${error.message}. Please try again.`,
+        timestamp: new Date()
+      }]);
+    } finally {
       setIsProcessing(false);
-    }, 1500);
+    }
 
     e.target.value = '';
   };
@@ -84,25 +105,50 @@ export default function FinancialChatbot({ user, onLogout }) {
     setInput('');
     setIsProcessing(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const responses = [
-        "Based on your uploaded statements, I can see your spending patterns. Your largest expense category appears to be dining out, accounting for approximately 25% of your total spending.",
-        "Looking at your transaction history, I notice you have recurring subscriptions totaling around $150/month. Would you like me to list them out?",
-        "Your spending has increased by 15% compared to last month, primarily in the shopping category. Consider setting a budget limit for discretionary spending.",
-        "I've analyzed your income and expenses. You're currently saving about 20% of your monthly income, which is a healthy savings rate. Keep it up!",
-        "Based on the data, here are your top 3 spending categories: 1) Groceries ($450), 2) Transportation ($320), 3) Entertainment ($280)."
-      ];
-
+    try {
+      // Get file IDs from uploaded files
+      const fileIds = uploadedFiles.map(f => f.id);
+      
+      if (fileIds.length === 0) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: 'Please upload a financial statement first before asking questions.',
+          timestamp: new Date()
+        }]);
+        setIsProcessing(false);
+        return;
+      }
+      
+      if (!sessionId) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: 'Session error. Please upload your files again.',
+          timestamp: new Date()
+        }]);
+        setIsProcessing(false);
+        return;
+      }
+      
+      // Call backend analysis function
+      const result = await analyzeSpending(input, fileIds, sessionId);
+      
       const assistantMessage = {
         role: 'assistant',
-        content: responses[Math.floor(Math.random() * responses.length)],
+        content: result.response,
         timestamp: new Date()
       };
-
+      
       setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      console.error('Analysis error:', error); // Debug logging
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `Sorry, I encountered an error: ${error.message}. Please try again.`,
+        timestamp: new Date()
+      }]);
+    } finally {
       setIsProcessing(false);
-    }, 1000);
+    }
   };
 
   const handleKeyPress = (e) => {
