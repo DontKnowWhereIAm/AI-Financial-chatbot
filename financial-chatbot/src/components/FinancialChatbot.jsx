@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Send, DollarSign, FileText, X, TrendingUp, LogOut } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function FinancialChatbot({ user, onLogout }) {
   const [messages, setMessages] = useState([
@@ -281,10 +283,16 @@ export default function FinancialChatbot({ user, onLogout }) {
                       : 'bg-slate-800/50 backdrop-blur-sm text-white border border-purple-500/20'
                   }`}
                 >
-                  <p className="text-sm leading-relaxed">{message.content}</p>
+                  <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {message.content}
+                    </ReactMarkdown>
+                  </div>
+
                   <p className="text-xs mt-2 opacity-60">
                     {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </p>
+
                 </div>
               </div>
             ))}
