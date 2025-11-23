@@ -3,6 +3,7 @@ import json
 from typing import Dict, List, Optional
 import requests
 from groq import Groq
+from pdfconverter import *
 
 class FinancialChatbot:
     """
@@ -19,7 +20,10 @@ class FinancialChatbot:
             transactions_df: DataFrame with columns like 'amount', 'category', 'description', 'date'
         """
         self.api_key = api_key
-        self.transactions_df = transactions_df.copy()
+        self.income = 0  # Income calculated from transactions
+        self.transactions_df = self.categorize_transactions(transactions_df.copy())
+        # Calculate income from transactions after categorization
+        self._calculate_income_from_transactions()
         self.total_income = 0
         self.budget_goals = {
             'expenses': 0.70,  # 70% for needs
@@ -98,24 +102,40 @@ class FinancialChatbot:
             'savings': self.total_income * self.budget_goals['savings']
         }
     
-    def categorize_transactions(self):
+    def categorize_transactions(self, transactions_df: pd.DataFrame) -> pd.DataFrame:
         """Categorize transactions into expenses, wants and savings by making API calls to Groq"""
-        for transaction in self.transactions_df:
+        for index, row in transactions_df.iterrows():
             system_prompt = """You are a transaction classifier. Classify transactions into:
-        - category: specific category (e.g., 'Groceries', 'Entertainment', 'Rent', etc.)
-        - category_type: one of 'expenses' (needs), 'wants' (discretionary), or 'savings' (investments/savings)
-        
-        Respond ONLY with a JSON object like: {"category": "Groceries", "category_type": "expenses"}"""
+            - category: specific category (e.g., 'Groceries', 'Entertainment', 'Rent', 'Salary', 'Payroll', etc.)
+            - category_type: one of 'income' (money coming in like salary, payroll, deposits), 'expenses' (needs), 'wants' (discretionary), or 'savings' (investments/savings)
+            
+            Respond ONLY with a JSON object like: {"category": "Groceries", "category_type": "expenses"} or {"category": "Salary", "category_type": "income"}"""
             user_message = f"""Classify this transaction:
-Description: {transaction['description']}
-Amount: ${transaction['amount']:.2f}
+            Description: {row.get('transaction_description', row.get('description', ''))}
+            Amount: ${row.get('transaction_amount', row.get('amount', 0)):.2f}
 
-Respond with JSON only."""
-            response = self.call_groq_api(user_message, system_prompt)
+            Respond with JSON only."""
+            messages = [{"role": "user", "content": user_message}]
+            response = self.call_groq_api(messages, system_prompt)
             print(response)
-            transaction['category'] = response.get('category', 'Uncategorized')
-            transaction['category_type'] = response.get('category_type', 'expenses')
-        return self.transactions_df
+            try:
+                response_json = json.loads(response.strip().replace("```json", "").replace("```", "").strip())
+            except:
+                response_json = {}
+            transactions_df.at[index, 'category'] = response_json.get('category', 'Uncategorized')
+            transactions_df.at[index, 'category_type'] = response_json.get('category_type', 'expenses')
+        return transactions_df
+    
+    def _calculate_income_from_transactions(self):
+        """Calculate total income from transactions categorized as 'income'."""
+        income_total = 0
+        for _, row in self.transactions_df.iterrows():
+            if row.get('category_type') == 'income':
+                amount = row.get('transaction_amount', row.get('amount', 0))
+                if amount > 0:  # Only count positive amounts as income
+                    income_total += amount
+        self.income = income_total
+        print(f"💰 Calculated income from transactions: ${self.income:,.2f}")
     
     def analyze_current_spending(self) -> Dict:
         """Analyze current spending from transactions."""
@@ -138,11 +158,15 @@ Respond with JSON only."""
         category_breakdown = {}
         
         for _, row in all_transactions.iterrows():
-            amount = abs(row.get('amount', 0))
             category_type = row.get('category_type', 'expenses')  # default to expenses
             
+            # Skip income transactions - they're tracked separately
+            if category_type == 'income':
+                continue
+            
+            amount = abs(row.get('transaction_amount', row.get('amount', 0)))
             spending[category_type] = spending.get(category_type, 0) + amount
-            category_breakdown[row['category']] = category_breakdown.get(row['category'], 0) + amount
+            category_breakdown[row.get('category', 'Uncategorized')] = category_breakdown.get(row.get('category', 'Uncategorized'), 0) + amount
         
         print(category_breakdown)
         print(spending)
@@ -160,7 +184,8 @@ Respond with JSON only."""
         
         system_prompt = """You are a helpful financial advisor chatbot. Analyze the user's spending 
         and provide clear, actionable advice. Be encouraging but honest about areas for improvement.
-        Format your response in a clear, conversational way."""
+        IMPORTANT: For savings, exceeding the goal is excellent and should be praised! Savings above 
+        the target is a positive achievement, not overspending. Format your response in a clear, conversational way."""
         
         analysis_data = {
             'total_income': self.total_income,
@@ -173,7 +198,8 @@ Respond with JSON only."""
         
         user_message = f"""Please analyze my budget situation:
 
-            Income: ${self.total_income:,.2f}
+            Income from transactions: ${self.income:,.2f}
+            Budget income (user-set): ${self.total_income:,.2f}
 
             Budget Goals:
             - Expenses (Needs): {self.budget_goals['expenses']*100:.0f}% = ${budget['expenses']:,.2f}
@@ -191,9 +217,10 @@ Respond with JSON only."""
 
             Please provide:
             1. An overview of my spending vs budget
-            2. Which categories I'm overspending in
-            3. Specific suggestions on where to cut back
-            4. Remaining budget for each category this month"""
+            2. My income from the transactions
+            3. Which categories I'm overspending in (note: exceeding savings goal is good, not overspending)
+            4. Specific suggestions on where to cut back
+            5. Remaining budget for each category this month (for savings, show if I've exceeded the goal)"""
 
         messages = [{"role": "user", "content": user_message}]
         self.conversation_history.append({"role": "user", "content": user_message})
@@ -272,7 +299,7 @@ Respond with JSON only."""
         remaining = {
             'expenses': budget['expenses'] - current['spending']['expenses'],
             'wants': budget['wants'] - current['spending']['wants'],
-            'savings': budget['savings'] - current['spending']['savings']
+            'savings': current['spending']['savings'] - budget['savings']  # Positive when exceeding goal
         }
         
         user_message = f"""I just added a new transaction:
@@ -283,21 +310,22 @@ Respond with JSON only."""
 Updated Spending:
 - Expenses: ${current['spending']['expenses']:,.2f} / ${budget['expenses']:,.2f} (Remaining: ${remaining['expenses']:,.2f})
 - Wants: ${current['spending']['wants']:,.2f} / ${budget['wants']:,.2f} (Remaining: ${remaining['wants']:,.2f})
-- Savings: ${current['spending']['savings']:,.2f} / ${budget['savings']:,.2f} (Remaining: ${remaining['savings']:,.2f})
+- Savings: ${current['spending']['savings']:,.2f} / ${budget['savings']:,.2f} ({'Exceeded goal by' if remaining['savings'] > 0 else 'Remaining'}: ${abs(remaining['savings']):,.2f})
 
 Total Spent: ${current['total_spent']:,.2f} / ${self.total_income:,.2f}
 
 Please:
 1. Acknowledge the transaction
-2. Update me on my remaining budget for the month
+2. Update me on my remaining budget for the month (for savings, celebrate if I've exceeded the goal!)
 3. Let me know if I'm on track or need to adjust spending
-4. Give specific advice if I'm overspending in any category"""
+4. Give specific advice if I'm overspending in any category (remember: exceeding savings goal is excellent, not overspending)"""
 
         self.conversation_history.append({"role": "user", "content": user_message})
         
         system_prompt = """You are a helpful financial advisor. Provide brief, actionable updates 
         when users add transactions. Be encouraging when they're on track and gently firm when 
-        they're overspending."""
+        they're overspending. IMPORTANT: For savings transactions, exceeding the savings goal is 
+        excellent and should be praised! Savings above the target is a positive achievement."""
         
         response = self.call_groq_api(self.conversation_history, system_prompt)
         self.conversation_history.append({"role": "assistant", "content": response})
@@ -332,7 +360,7 @@ Please:
         remaining = {
             'expenses': budget['expenses'] - current['spending']['expenses'],
             'wants': budget['wants'] - current['spending']['wants'],
-            'savings': budget['savings'] - current['spending']['savings']
+            'savings': current['spending']['savings'] - budget['savings']  # Positive when exceeding goal
         }
         
         return {
@@ -363,8 +391,15 @@ Please:
             budget = summary['budget_allocations'][category]
             spent = summary['current_spending'][category]
             remaining = summary['remaining_budget'][category]
-            status = "✓" if remaining >= 0 else "⚠"
-            print(f"{category.capitalize():<20} ${budget:>12,.2f} ${spent:>12,.2f} ${remaining:>12,.2f} {status}")
+            if category == 'savings':
+                # For savings, positive remaining means exceeded goal (good!)
+                status = "🎉" if remaining > 0 else ("✓" if remaining >= 0 else "⚠")
+                remaining_display = remaining  # Already shows exceeded amount as positive
+            else:
+                # For expenses and wants, positive remaining is good
+                status = "✓" if remaining >= 0 else "⚠"
+                remaining_display = remaining
+            print(f"{category.capitalize():<20} ${budget:>12,.2f} ${spent:>12,.2f} ${remaining_display:>12,.2f} {status}")
         
         print("\n" + "="*60)
         print(f"Total Transactions: {summary['transactions_count']}")
@@ -433,4 +468,9 @@ def example_usage():
 if __name__ == "__main__":
     print("Financial Chatbot Module Loaded!")
     print("Use example_usage() to see a demo, or create your own instance.")
-    example_usage()
+    API_KEY = "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"
+    test_df = load_transactions_from_file(r"C:\Users\Mitsy\Downloads\bank_statement_ex.xlsx")
+    test_chatbot = FinancialChatbot(API_KEY, test_df)
+    test_chatbot.set_budget_goals(expenses=0.70, wants=0.20, savings=0.10)
+    test_chatbot.get_initial_analysis()
+    test_chatbot.print_summary()

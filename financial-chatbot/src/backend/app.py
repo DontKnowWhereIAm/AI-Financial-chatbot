@@ -21,6 +21,37 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Store chatbot instances per session (in production, use Redis or similar)
 chatbot_sessions = {}
 
+def parse_budget_input(expenses, wants, savings):
+    """
+    Parse budget input that can be either fractions (0.7, 0.2, 0.1) or percentages (70, 20, 10).
+    Returns normalized fractions (values between 0 and 1 that sum to 1).
+    """
+    try:
+        expenses = float(expenses)
+        wants = float(wants)
+        savings = float(savings)
+        
+        # Check if values are percentages (sum > 1) or fractions (sum <= 1)
+        total = expenses + wants + savings
+        
+        if total > 1.5:  # Likely percentages (e.g., 70 + 20 + 10 = 100)
+            # Convert percentages to fractions
+            expenses = expenses / 100
+            wants = wants / 100
+            savings = savings / 100
+            total = expenses + wants + savings
+        
+        # Normalize to ensure they sum to 1
+        if abs(total - 1.0) > 0.01:
+            expenses = expenses / total
+            wants = wants / total
+            savings = savings / total
+        
+        return expenses, wants, savings
+    except (ValueError, TypeError):
+        # Return defaults if parsing fails
+        return 0.70, 0.20, 0.10
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -28,6 +59,66 @@ def allowed_file(filename):
 def health_check():
     """Health check endpoint"""
     return jsonify({'status': 'ok', 'message': 'Backend is running'})
+
+@app.route('/api/set-budget', methods=['POST'])
+def set_budget():
+    """
+    Set budget goals before file upload.
+    Accepts expenses, wants, savings as either fractions (0.7, 0.2, 0.1) or percentages (70, 20, 10).
+    If not provided, defaults to 70%, 20%, 10%.
+    """
+    try:
+        data = request.json
+        session_id = data.get('session_id', 'default')
+        expenses = data.get('expenses')
+        wants = data.get('wants')
+        savings = data.get('savings')
+        
+        # Initialize session if it doesn't exist
+        if session_id not in chatbot_sessions:
+            chatbot_sessions[session_id] = {
+                'dataframes': [],
+                'chatbot': None,
+                'budget': None
+            }
+        
+        # If budget values are provided, parse and store them
+        if expenses is not None and wants is not None and savings is not None:
+            expenses, wants, savings = parse_budget_input(expenses, wants, savings)
+            chatbot_sessions[session_id]['budget'] = {
+                'expenses': expenses,
+                'wants': wants,
+                'savings': savings
+            }
+            return jsonify({
+                'success': True,
+                'message': f'Budget set to: Expenses {expenses*100:.1f}%, Wants {wants*100:.1f}%, Savings {savings*100:.1f}%',
+                'budget': {
+                    'expenses': expenses,
+                    'wants': wants,
+                    'savings': savings
+                }
+            })
+        else:
+            # Use defaults if not provided
+            default_expenses, default_wants, default_savings = 0.70, 0.20, 0.10
+            chatbot_sessions[session_id]['budget'] = {
+                'expenses': default_expenses,
+                'wants': default_wants,
+                'savings': default_savings
+            }
+            return jsonify({
+                'success': True,
+                'message': 'Using default budget: Expenses 70%, Wants 20%, Savings 10%',
+                'budget': {
+                    'expenses': default_expenses,
+                    'wants': default_wants,
+                    'savings': default_savings
+                }
+            })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
@@ -60,7 +151,8 @@ def upload_file():
             if session_id not in chatbot_sessions:
                 chatbot_sessions[session_id] = {
                     'dataframes': [],
-                    'chatbot': None
+                    'chatbot': None,
+                    'budget': None
                 }
 
             chatbot_sessions[session_id]['dataframes'].append({
@@ -78,6 +170,20 @@ def upload_file():
 
             # Initialize chatbot with the dataframe
             chatbot_sessions[session_id]['chatbot'] = FinancialChatbot(api_key, combined_df)
+            chat_session = chatbot_sessions[session_id]['chatbot']
+            
+            # Set budget goals - use stored budget or defaults (70, 20, 10)
+            if chatbot_sessions[session_id]['budget']:
+                budget = chatbot_sessions[session_id]['budget']
+                chatbot_sessions[session_id]['chatbot'].set_budget_goals(
+                    expenses=budget['expenses'],
+                    wants=budget['wants'],
+                    savings=budget['savings']
+                )
+            else:
+                # Use default budget if not set
+                chatbot_sessions[session_id]['chatbot'].set_budget_goals(expenses=0.70, wants=0.20, savings=0.10)
+
 
             # Get basic statistics
             stats = {
@@ -109,7 +215,7 @@ def upload_file():
 @app.route('/api/chat', methods=['POST'])
 def chat():
     """
-    Handle chat queries using financial_chatbot.py
+    Handle chat queries using financial_chatbot.py with context from uploaded file
     """
     try:
         data = request.json
@@ -124,9 +230,65 @@ def chat():
             return jsonify({'error': 'No data uploaded yet. Please upload a file first.'}), 400
 
         chatbot = chatbot_sessions[session_id]['chatbot']
+        
+        # Get context from uploaded file data
+        try:
+            # Get spending analysis
+            spending_analysis = chatbot.analyze_current_spending()
+            
+            # Get budget summary
+            summary = chatbot.get_summary()
+            
+            # Get transaction statistics
+            transactions_df = chatbot.transactions_df
+            transaction_stats = {
+                'total_transactions': len(transactions_df),
+                'date_range': {
+                    'start': transactions_df['transaction_date'].min().strftime('%Y-%m-%d') if 'transaction_date' in transactions_df.columns else None,
+                    'end': transactions_df['transaction_date'].max().strftime('%Y-%m-%d') if 'transaction_date' in transactions_df.columns else None
+                },
+                'income_from_transactions': chatbot.income,
+                'total_amount': float(transactions_df['transaction_amount'].sum()) if 'transaction_amount' in transactions_df.columns else 0
+            }
+            
+            # Get category breakdown
+            category_breakdown = spending_analysis.get('category_breakdown', {})
+            
+            # Build context message
+            context = f"""Current Financial Context from Uploaded File:
 
-        # Use the chatbot's chat method
-        response = chatbot.chat(message)
+            Transaction Statistics:
+            - Total Transactions: {transaction_stats['total_transactions']}
+            - Date Range: {transaction_stats['date_range']['start']} to {transaction_stats['date_range']['end']}
+            - Income from Transactions: ${transaction_stats['income_from_transactions']:,.2f}
+            - Total Transaction Amount: ${transaction_stats['total_amount']:,.2f}
+
+            Current Spending:
+            - Expenses: ${spending_analysis['spending'].get('expenses', 0):,.2f}
+            - Wants: ${spending_analysis['spending'].get('wants', 0):,.2f}
+            - Savings: ${spending_analysis['spending'].get('savings', 0):,.2f}
+            - Total Spent: ${spending_analysis['total_spent']:,.2f}
+
+            Budget Summary:
+            - Budget Income: ${summary['total_income']:,.2f}
+            - Expenses Budget: ${summary['budget_allocations']['expenses']:,.2f} (Spent: ${summary['current_spending']['expenses']:,.2f}, Remaining: ${summary['remaining_budget']['expenses']:,.2f})
+            - Wants Budget: ${summary['budget_allocations']['wants']:,.2f} (Spent: ${summary['current_spending']['wants']:,.2f}, Remaining: ${summary['remaining_budget']['wants']:,.2f})
+            - Savings Goal: ${summary['budget_allocations']['savings']:,.2f} (Saved: ${summary['current_spending']['savings']:,.2f}, {'Exceeded by' if summary['remaining_budget']['savings'] > 0 else 'Remaining'}: ${abs(summary['remaining_budget']['savings']):,.2f})
+
+            Top Spending Categories:
+            {json.dumps(dict(sorted(category_breakdown.items(), key=lambda x: x[1], reverse=True)[:10]), indent=2) if category_breakdown else 'No categories yet'}
+
+User Question: {message}
+
+Please answer the user's question using the above context from their uploaded financial data."""
+            
+            # Use the chatbot's chat method with enhanced context
+            response = chatbot.chat(context)
+            
+        except Exception as context_error:
+            # If context gathering fails, still try to chat without context
+            print(f"Warning: Could not gather context: {str(context_error)}")
+            response = chatbot.chat(message)
 
         return jsonify({
             'success': True,
