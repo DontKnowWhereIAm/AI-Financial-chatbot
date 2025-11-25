@@ -132,7 +132,8 @@ AI-Financial-Chatbot/
 │   │   │
 │   │   ├── assets/                    # Icons, graphics, styles
 │   │   └── App.jsx                    # Root component
-│   │
+|   |
+│   ├── 6150_Financial_Chatbot.ipynb   # Tested logic for Data cleaning and EDA, also the logic for Agentic Flow
 │   ├── package.json
 │   ├── vite.config.js
 │   └── index.html
