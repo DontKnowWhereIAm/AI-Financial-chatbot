@@ -93,6 +93,7 @@ http://localhost:5000
 ### Install Node Dependencies
 ```bash
 cd financial-chatbot
+npm install -D tailwindcss postcss autoprefixer
 npm install
 ```
 
@@ -135,7 +136,9 @@ AI-Financial-Chatbot/
 │   ├── package.json
 │   ├── vite.config.js
 │   └── index.html
-│
+├── Documentation/                     # Documentation of the whole project right from the beginning
+├── Output screenshots/                # Output screenshots of the AI recommendation and the application
+├── Sample Input Dataset/              # Sample input files passed for testing                 
 └── README.md (this file)
 ```
 
